@@ -42,15 +42,15 @@ from uqal_core.ast.condition_registry import register_condition_builder
 
 register_condition_builder(
     STWithinNode,
-    lambda node: (f"ST_Within({node.column}, %s)", (node.polygon,)),
+    lambda node: (f"ST_Within({node.column}, ST_GeomFromText(%s, 4326))", (node.polygon,)),
 )
 register_condition_builder(
     STIntersectsNode,
-    lambda node: (f"ST_Intersects({node.column}, %s)", (node.polygon,)),
+    lambda node: (f"ST_Intersects({node.column}, ST_GeomFromText(%s, 4326))", (node.polygon,)),
 )
 register_condition_builder(
     STDWithinNode,
-    lambda node: (f"ST_DWithin({node.column}, %s, %s)", (node.point, node.distance)),
+    lambda node: (f"ST_DWithin({node.column}, ST_GeomFromText(%s, 4326), %s)", (node.point, node.distance)),
 )
 
 __all__ = ["PostGISExtension"]

@@ -14,6 +14,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["community_postgis"]
 
+[project.entry-points."uqal.modules"]
+"community.postgis" = "community_postgis.module:PostGISExtension"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

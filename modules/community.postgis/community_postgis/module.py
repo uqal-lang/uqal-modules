@@ -33,6 +33,7 @@ class PostGISExtension(UQALModule):
             name="community.postgis",
             version="0.1.0",
             requires=["standard.postgresql"],
+            is_extension=True,
         )
 
     def get_grammar_extension(self) -> str:
