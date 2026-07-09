@@ -1,0 +1,10 @@
+{
+  "name": "community.postgis",
+  "version": "0.1.0",
+  "compatible_with": 1,
+  "type": "extension",
+  "extends": "standard.postgresql",
+  "description": "PostGIS geospatial syntax for PostgreSQL connections.",
+  "author": "uqal-lang",
+  "repository": "https://github.com/uqal-lang/uqal-modules"
+}

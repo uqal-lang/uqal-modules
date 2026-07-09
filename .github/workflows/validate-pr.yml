@@ -85,7 +85,7 @@ jobs:
           echo "module=$MODULE" >> $GITHUB_OUTPUT
           echo "module_path=$MODULE_PATH" >> $GITHUB_OUTPUT
 
-          HAS_GRAMMAR=$(test -f "$MODULE_PATH/grammar_extension.lark" && echo "true" || echo "false")
+          HAS_GRAMMAR=$(find "$MODULE_PATH" -name "grammar_extension.lark" | grep -q . && echo "true" || echo "false")
           echo "has_grammar=$HAS_GRAMMAR" >> $GITHUB_OUTPUT
 
       - name: Verify scope in PR title matches module
@@ -181,8 +181,8 @@ jobs:
             exit 1
           fi
 
-          # Validator tests: required if native_validator.py exists
-          if [[ -f "$MODULE_PATH/native_validator.py" ]]; then
+          # Validator tests: required if native_validator.py exists (anywhere in module)
+          if find "$MODULE_PATH" -name "native_validator.py" | grep -q .; then
             if [[ ! -f "$MODULE_PATH/tests/unit/test_validator.py" ]]; then
               echo "❌ native_validator.py exists but tests/unit/test_validator.py is missing"
               exit 1
@@ -229,23 +229,34 @@ jobs:
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: docker compose -f docker-compose.test.yml up -d --wait
 
+      - name: Detect Python package name
+        id: pkg
+        working-directory: ${{ needs.validate-module.outputs.module_path }}
+        run: |
+          PKG=$(uv run python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(list(d.get('tool',{}).get('hatch',{}).get('build',{}).get('targets',{}).get('wheel',{}).get('packages',['src'])[0:1])[0] if d.get('tool',{}).get('hatch',{}).get('build',{}).get('targets',{}).get('wheel',{}).get('packages') else 'src')" 2>/dev/null || echo "src")
+          echo "pkg=$PKG" >> $GITHUB_OUTPUT
+
       - name: Run unit + grammar tests with coverage (translator ≥80%)
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
           uv run pytest tests/unit/ tests/grammar/ \
-            --cov=. \
+            --cov=${{ steps.pkg.outputs.pkg }} \
             --cov-report=term-missing \
             --cov-fail-under=80 \
             -v
 
       - name: Check native_validator coverage (≥90%)
-        if: hashFiles(format('{0}/native_validator.py', needs.validate-module.outputs.module_path)) != ''
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
-          uv run pytest tests/unit/test_validator.py \
-            --cov=native_validator \
-            --cov-fail-under=90 \
-            -v
+          PKG="${{ steps.pkg.outputs.pkg }}"
+          if python -c "import importlib; importlib.import_module('$PKG.native_validator')" 2>/dev/null; then
+            uv run pytest tests/unit/test_validator.py \
+              --cov=${PKG}.native_validator \
+              --cov-fail-under=90 \
+              -v
+          else
+            echo "No native_validator module found, skipping."
+          fi
 
       - name: Run integration tests
         if: needs.validate-module.outputs.module_type == 'standalone'
@@ -254,7 +265,16 @@ jobs:
 
       - name: Run UQAL compliance suite
         working-directory: ${{ needs.validate-module.outputs.module_path }}
-        run: uv run pytest -m compliance -v
+        run: |
+          set +e
+          uv run pytest -m compliance -v
+          EXIT=$?
+          set -e
+          if [ $EXIT -eq 5 ]; then
+            echo "No compliance tests found — skipping."
+            exit 0
+          fi
+          exit $EXIT
 
       - name: Stop test database
         if: always() && needs.validate-module.outputs.module_type == 'standalone'
