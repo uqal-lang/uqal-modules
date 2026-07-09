@@ -1,0 +1,19 @@
+# ─── Pipeline & repo config ───────────────────────────────────────────────────
+# Only core maintainers may change CI workflows, CODEOWNERS, or cliff config.
+/.github/                    @uqal/maintainers
+/cliff.toml                  @uqal/maintainers
+
+# ─── All modules ──────────────────────────────────────────────────────────────
+# Every module PR requires at least one maintainer approval.
+/modules/                    @uqal/maintainers
+
+# ─── Module-specific owners ───────────────────────────────────────────────────
+# Added when a module is first merged. The listed author can approve their own
+# module's future PRs without needing an additional maintainer review,
+# as long as a maintainer has already approved the initial submission.
+#
+# Format:
+#   /modules/community.<name>/   @uqal/maintainers @github-handle
+#
+# Example (uncomment and fill in after first merge):
+# /modules/community.postgis/    @uqal/maintainers @contributor-handle

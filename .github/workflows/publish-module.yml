@@ -1,0 +1,183 @@
+name: Publish Module
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # for version bump commit + tag
+  id-token: write   # for OIDC Trusted Publishing (no API key needed)
+
+jobs:
+  # ─── 1. Detect what changed ─────────────────────────────────────────────────
+  detect:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      module: ${{ steps.detect.outputs.module }}
+      module_path: ${{ steps.detect.outputs.module_path }}
+      docs_only: ${{ steps.detect.outputs.docs_only }}
+      skip: ${{ steps.detect.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed module and change type
+        id: detect
+        run: |
+          COMMIT_MSG=$(git log -1 --format=%s)
+
+          # Skip version-bump commits created by this pipeline
+          if echo "$COMMIT_MSG" | grep -q '\[skip ci\]'; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+
+          # Find changed module directories
+          MODULE_DIRS=$(echo "$CHANGED" | grep '^modules/' | cut -d'/' -f1-2 | sort -u)
+          COUNT=$(echo "$MODULE_DIRS" | grep -c 'modules/' 2>/dev/null || echo 0)
+
+          if [[ "$COUNT" -eq 0 ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          MODULE=$(echo "$MODULE_DIRS" | head -1 | cut -d'/' -f2)
+          MODULE_PATH="modules/$MODULE"
+          echo "module=$MODULE" >> $GITHUB_OUTPUT
+          echo "module_path=$MODULE_PATH" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+          # Docs-only: all changed files are inside docs/
+          NON_DOCS=$(echo "$CHANGED" | grep "^$MODULE_PATH/" | grep -v "^$MODULE_PATH/docs/" || true)
+          if [[ -z "$NON_DOCS" ]]; then
+            echo "docs_only=true" >> $GITHUB_OUTPUT
+          else
+            echo "docs_only=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ─── 2a. Docs-only → notify uqal-docs, nothing else ───────────────────────
+  deploy-docs-only:
+    name: Deploy Docs (docs-only)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.skip == 'false' && needs.detect.outputs.docs_only == 'true'
+    steps:
+      - name: Trigger uqal-docs update (docs-only)
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.UQAL_DOCS_PAT }}
+          repository: uqal/uqal-docs
+          event-type: module-docs-updated
+          client-payload: |
+            {
+              "module": "${{ needs.detect.outputs.module }}",
+              "source_repo": "${{ github.repository }}",
+              "ref": "${{ github.sha }}",
+              "docs_only": true
+            }
+
+  # ─── 2b. Code change → version bump + publish + changelog + docs ────────────
+  publish:
+    name: Version, Publish & Changelog
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.skip == 'false' && needs.detect.outputs.docs_only == 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Determine version bump from commit type
+        id: version
+        run: |
+          MODULE="${{ needs.detect.outputs.module }}"
+          COMMIT_MSG=$(git log -1 --format=%s)
+          TYPE=$(echo "$COMMIT_MSG" | grep -oP '^[a-z]+(?=\()')
+
+          # Get current version from last matching tag
+          LAST_TAG=$(git tag -l "${MODULE}-v*" | sort -V | tail -1)
+          if [[ -z "$LAST_TAG" ]]; then
+            CURRENT="0.0.0"
+          else
+            CURRENT=$(echo "$LAST_TAG" | grep -oP '\d+\.\d+\.\d+$')
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          case "$TYPE" in
+            breaking) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+            feat)     MINOR=$((MINOR+1)); PATCH=0 ;;
+            *)        PATCH=$((PATCH+1)) ;;
+          esac
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${MODULE}-v${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "Calculated: $CURRENT → $NEW_VERSION (bump: $TYPE)"
+
+      - name: Write new version to module.json
+        run: |
+          MODULE_PATH="${{ needs.detect.outputs.module_path }}"
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          jq ".version = \"$NEW_VERSION\"" "$MODULE_PATH/module.json" > tmp.json
+          mv tmp.json "$MODULE_PATH/module.json"
+          echo "✅ module.json version updated to $NEW_VERSION"
+
+      - name: Commit version bump back to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ needs.detect.outputs.module_path }}/module.json"
+          git commit -m "chore(${{ needs.detect.outputs.module }}): bump version to ${{ steps.version.outputs.new_version }} [skip ci]"
+          git push
+
+      - name: Create and push git tag
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "✅ Created tag $TAG"
+
+      - name: Build package
+        working-directory: ${{ needs.detect.outputs.module_path }}
+        run: uv build
+
+      - name: Publish to PyPI (OIDC Trusted Publishing)
+        working-directory: ${{ needs.detect.outputs.module_path }}
+        run: uv publish
+        # No API key needed — GitHub OIDC token authenticates directly with PyPI
+        # Requires Trusted Publishing configured on PyPI for this repo
+
+      - name: Generate changelog with git-cliff
+        uses: orhun/git-cliff-action@v3
+        with:
+          config: cliff.toml
+          args: >
+            --tag ${{ steps.version.outputs.tag }}
+            --include-path "modules/${{ needs.detect.outputs.module }}/**"
+            --output CHANGELOG_FRAGMENT.md
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Trigger uqal-docs update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.UQAL_DOCS_PAT }}
+          repository: uqal/uqal-docs
+          event-type: module-docs-updated
+          client-payload: |
+            {
+              "module": "${{ needs.detect.outputs.module }}",
+              "version": "${{ steps.version.outputs.new_version }}",
+              "tag": "${{ steps.version.outputs.tag }}",
+              "source_repo": "${{ github.repository }}",
+              "docs_only": false
+            }
