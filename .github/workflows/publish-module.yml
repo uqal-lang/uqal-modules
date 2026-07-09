@@ -5,8 +5,8 @@ on:
     branches: [main]
 
 permissions:
-  contents: write   # for version bump commit + tag
-  id-token: write   # for OIDC Trusted Publishing (no API key needed)
+  contents: write
+  id-token: write   # required for PyPI OIDC Trusted Publishing
 
 jobs:
   # ─── 1. Detect what changed ─────────────────────────────────────────────────
@@ -18,6 +18,7 @@ jobs:
       module_path: ${{ steps.detect.outputs.module_path }}
       docs_only: ${{ steps.detect.outputs.docs_only }}
       skip: ${{ steps.detect.outputs.skip }}
+      pypi_package: ${{ steps.detect.outputs.pypi_package }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,15 +29,12 @@ jobs:
         run: |
           COMMIT_MSG=$(git log -1 --format=%s)
 
-          # Skip version-bump commits created by this pipeline
           if echo "$COMMIT_MSG" | grep -q '\[skip ci\]'; then
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           CHANGED=$(git diff --name-only HEAD~1 HEAD)
-
-          # Find changed module directories
           MODULE_DIRS=$(echo "$CHANGED" | grep '^modules/' | cut -d'/' -f1-2 | sort -u)
           COUNT=$(echo "$MODULE_DIRS" | grep -c 'modules/' 2>/dev/null || echo 0)
 
@@ -59,6 +57,15 @@ jobs:
             echo "docs_only=false" >> $GITHUB_OUTPUT
           fi
 
+          # Read pypi_package from module.json (empty = no PyPI publish)
+          PYPI_PKG=$(jq -r '.pypi_package // empty' "$MODULE_PATH/module.json" 2>/dev/null || true)
+          echo "pypi_package=$PYPI_PKG" >> $GITHUB_OUTPUT
+          if [[ -n "$PYPI_PKG" ]]; then
+            echo "📦 PyPI publishing enabled: $PYPI_PKG"
+          else
+            echo "📦 PyPI publishing disabled (no pypi_package in module.json)"
+          fi
+
   # ─── 2a. Docs-only → notify uqal-docs, nothing else ───────────────────────
   deploy-docs-only:
     name: Deploy Docs (docs-only)
@@ -66,11 +73,11 @@ jobs:
     needs: detect
     if: needs.detect.outputs.skip == 'false' && needs.detect.outputs.docs_only == 'true'
     steps:
-      - name: Trigger uqal-docs update (docs-only)
+      - name: Trigger uqal-docs update
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.UQAL_DOCS_PAT }}
-          repository: uqal/uqal-docs
+          repository: uqal-lang/uqal-docs
           event-type: module-docs-updated
           client-payload: |
             {
@@ -102,7 +109,6 @@ jobs:
           COMMIT_MSG=$(git log -1 --format=%s)
           TYPE=$(echo "$COMMIT_MSG" | grep -oP '^[a-z]+(?=\()')
 
-          # Get current version from last matching tag
           LAST_TAG=$(git tag -l "${MODULE}-v*" | sort -V | tail -1)
           if [[ -z "$LAST_TAG" ]]; then
             CURRENT="0.0.0"
@@ -129,7 +135,6 @@ jobs:
           NEW_VERSION="${{ steps.version.outputs.new_version }}"
           jq ".version = \"$NEW_VERSION\"" "$MODULE_PATH/module.json" > tmp.json
           mv tmp.json "$MODULE_PATH/module.json"
-          echo "✅ module.json version updated to $NEW_VERSION"
 
       - name: Commit version bump back to main
         run: |
@@ -146,15 +151,21 @@ jobs:
           git push origin "$TAG"
           echo "✅ Created tag $TAG"
 
-      - name: Build package
+      - name: Build package (PyPI only)
+        if: needs.detect.outputs.pypi_package != ''
         working-directory: ${{ needs.detect.outputs.module_path }}
-        run: uv build
+        run: |
+          if [[ ! -f "pyproject.toml" ]]; then
+            echo "❌ pypi_package is set in module.json but pyproject.toml is missing."
+            echo "   Add a pyproject.toml to publish to PyPI, or remove pypi_package from module.json."
+            exit 1
+          fi
+          uv build
 
       - name: Publish to PyPI (OIDC Trusted Publishing)
+        if: needs.detect.outputs.pypi_package != ''
         working-directory: ${{ needs.detect.outputs.module_path }}
         run: uv publish
-        # No API key needed — GitHub OIDC token authenticates directly with PyPI
-        # Requires Trusted Publishing configured on PyPI for this repo
 
       - name: Generate changelog with git-cliff
         uses: orhun/git-cliff-action@v3
@@ -171,7 +182,7 @@ jobs:
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.UQAL_DOCS_PAT }}
-          repository: uqal/uqal-docs
+          repository: uqal-lang/uqal-docs
           event-type: module-docs-updated
           client-payload: |
             {
