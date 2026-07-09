@@ -266,8 +266,10 @@ jobs:
       - name: Run UQAL compliance suite
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
+          set +e
           uv run pytest -m compliance -v
           EXIT=$?
+          set -e
           if [ $EXIT -eq 5 ]; then
             echo "No compliance tests found — skipping."
             exit 0
