@@ -1,0 +1,47 @@
+name: New Module Proposal
+description: Propose a new community module before starting development.
+title: "proposal: community.<module>"
+labels: ["new-module"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Opening a proposal before you start development is optional but recommended.
+        It lets maintainers give early feedback on scope and naming before you invest time building.
+
+  - type: input
+    id: name
+    attributes:
+      label: Proposed module name
+      placeholder: "e.g. community.clickhouse"
+    validations:
+      required: true
+
+  - type: input
+    id: type
+    attributes:
+      label: Module type
+      placeholder: "standalone or extension (extends: <module name>)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What does this module do?
+      description: One to three sentences. What database or capability does it add?
+    validations:
+      required: true
+
+  - type: textarea
+    id: syntax
+    attributes:
+      label: New syntax (if any)
+      description: Sketch of new UQAL syntax this module would introduce.
+
+  - type: input
+    id: author
+    attributes:
+      label: Your GitHub handle
+    validations:
+      required: true
