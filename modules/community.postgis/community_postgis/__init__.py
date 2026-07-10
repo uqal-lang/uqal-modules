@@ -1,3 +1,5 @@
+"""PostGIS geospatial extension for UQAL standard.postgresql."""
+
 from .module import PostGISExtension
 from .nodes import STDWithinNode, STIntersectsNode, STWithinNode
 
