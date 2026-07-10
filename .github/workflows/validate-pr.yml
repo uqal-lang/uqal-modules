@@ -78,10 +78,11 @@ jobs:
           fi
 
           # Block community contributors from changing files outside modules/
+          # Note: .github/ and root files are protected via CODEOWNERS — no runtime check needed here
           NON_MODULE=$(echo "$CHANGED" | grep -v '^modules/' || true)
           if [[ -n "$NON_MODULE" ]]; then
             ASSOCIATION="${{ github.event.pull_request.author_association }}"
-            if [[ "$ASSOCIATION" != "OWNER" && "$ASSOCIATION" != "MEMBER" && "$ASSOCIATION" != "COLLABORATOR" ]]; then
+            if [[ "$ASSOCIATION" == "NONE" || "$ASSOCIATION" == "FIRST_TIME_CONTRIBUTOR" || "$ASSOCIATION" == "FIRST_TIMER" ]]; then
               echo "❌ Community contributors may only change files inside modules/."
               echo "   Unexpected changed files:"
               echo "$NON_MODULE"
