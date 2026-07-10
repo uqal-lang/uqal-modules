@@ -125,21 +125,14 @@ jobs:
           echo "tag=${MODULE}-v${NEW_VERSION}" >> $GITHUB_OUTPUT
           echo "Calculated: $CURRENT → $NEW_VERSION (bump: $TYPE)"
 
-      - name: Write new version to module.json
+      - name: Write new version to module.json and pyproject.toml
         run: |
           MODULE_PATH="${{ needs.detect.outputs.module_path }}"
           NEW_VERSION="${{ steps.version.outputs.new_version }}"
           jq ".version = \"$NEW_VERSION\"" "$MODULE_PATH/module.json" > tmp.json
           mv tmp.json "$MODULE_PATH/module.json"
-          echo "module.json version updated to $NEW_VERSION"
-
-      - name: Commit version bump back to main
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "${{ needs.detect.outputs.module_path }}/module.json"
-          git commit -m "chore(${{ needs.detect.outputs.module }}): bump version to ${{ steps.version.outputs.new_version }} [skip ci]"
-          git push
+          sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" "$MODULE_PATH/pyproject.toml"
+          echo "Versions updated to $NEW_VERSION"
 
       - name: Create and push git tag
         run: |

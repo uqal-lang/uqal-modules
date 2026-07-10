@@ -125,7 +125,7 @@ jobs:
           if [[ -z "$MODULE" ]]; then
             exit 0
           fi
-          SCOPE=$(echo "$PR_TITLE" | grep -oP '(?<=\()[^)]+(?=\))')
+          SCOPE=$(echo "$PR_TITLE" | grep -oP '(?<=\()[^)]+(?=\))' | head -1)
           if [[ "$SCOPE" != "$MODULE" ]]; then
             echo "ERROR: PR title scope '$SCOPE' does not match changed module '$MODULE'."
             exit 1
