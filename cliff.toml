@@ -21,7 +21,7 @@ split_commits = false
 # Turn (#123) at end of commit message into a clickable PR link
 [[git.commit_preprocessors]]
 pattern = '\(#(\d+)\)$'
-replace = '([#$1](https://github.com/uqal/uqal-modules/pull/$1))'
+replace = '([#$1](https://github.com/uqal-lang/uqal-modules/pull/$1))'
 
 # Group commits by type → changelog section
 [[git.commit_parsers]]

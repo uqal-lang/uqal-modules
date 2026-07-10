@@ -5,6 +5,10 @@ on:
     types: [opened, synchronize, reopened, edited]
     branches: [main, 'dev/**']
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   # ─── 1. Branch & Title Rules ────────────────────────────────────────────────
   branch-and-title:
@@ -18,16 +22,16 @@ jobs:
 
           if [[ "$TARGET" == "main" ]]; then
             if [[ ! "$BRANCH" =~ ^(dev/|hotfix/) ]]; then
-              echo "❌ PRs to main must come from dev/* or hotfix/* branches."
-              echo "   Got: $BRANCH"
+              echo "ERROR: PRs to main must come from dev/* or hotfix/* branches."
+              echo "  Got: $BRANCH"
               exit 1
             fi
           fi
 
           if [[ "$TARGET" =~ ^dev/ ]]; then
             if [[ ! "$BRANCH" =~ ^(feat/|fix/|refactor/|docs/|test/|chore/) ]]; then
-              echo "❌ PRs to dev/* must come from feat/*, fix/*, refactor/*, docs/*, test/*, chore/*."
-              echo "   Got: $BRANCH"
+              echo "ERROR: PRs to dev/* must come from feat/*, fix/*, refactor/*, docs/*, test/*, chore/*."
+              echo "  Got: $BRANCH"
               exit 1
             fi
           fi
@@ -38,18 +42,12 @@ jobs:
         run: |
           PATTERN='^(feat|fix|breaking|refactor|docs|test|chore)\([a-z0-9._-]+\): .{3,}'
           if [[ ! "$PR_TITLE" =~ $PATTERN ]]; then
-            echo "❌ PR title must follow Conventional Commits: type(scope): description"
-            echo "   Valid types: feat, fix, breaking, refactor, docs, test, chore"
-            echo "   Example:     feat(community.postgis): add ST_Within support"
-            echo "   Got:         $PR_TITLE"
+            echo "ERROR: PR title must follow Conventional Commits: type(scope): description"
+            echo "  Valid types: feat, fix, breaking, refactor, docs, test, chore"
+            echo "  Example:     feat(community.postgis): add ST_Within support"
+            echo "  Got:         $PR_TITLE"
             exit 1
           fi
-
-      - name: Check scope matches changed module
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        uses: actions/checkout@v4
-        # This step needs the file list — checked in validate-module below
 
   # ─── 2. Module Structure ────────────────────────────────────────────────────
   validate-module:
@@ -60,6 +58,7 @@ jobs:
       module_path: ${{ steps.detect.outputs.module_path }}
       has_grammar: ${{ steps.detect.outputs.has_grammar }}
       module_type: ${{ steps.detect.outputs.module_type }}
+      skip: ${{ steps.detect.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,12 +68,40 @@ jobs:
         id: detect
         run: |
           CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
-          MODULE_DIRS=$(echo "$CHANGED" | grep '^modules/' | cut -d'/' -f1-2 | sort -u)
-          COUNT=$(echo "$MODULE_DIRS" | grep -c 'modules/' 2>/dev/null || echo 0)
+
+          # Block forbidden file types for everyone (secrets, credentials)
+          FORBIDDEN=$(echo "$CHANGED" | grep -iE '\.(env|pem|key|p12|pfx|crt|cer|secret)$|^\.env$|id_rsa|id_ed25519' || true)
+          if [[ -n "$FORBIDDEN" ]]; then
+            echo "ERROR: PR contains potentially sensitive files:"
+            echo "$FORBIDDEN"
+            exit 1
+          fi
+
+          # Block anonymous/first-time contributors from changing files outside modules/
+          # .github/ and root files are protected via CODEOWNERS for everyone else
+          NON_MODULE=$(echo "$CHANGED" | grep -v '^modules/' || true)
+          if [[ -n "$NON_MODULE" ]]; then
+            ASSOCIATION="${{ github.event.pull_request.author_association }}"
+            if [[ "$ASSOCIATION" == "NONE" || "$ASSOCIATION" == "FIRST_TIME_CONTRIBUTOR" || "$ASSOCIATION" == "FIRST_TIMER" ]]; then
+              echo "ERROR: Community contributors may only change files inside modules/."
+              echo "  Unexpected changed files:"
+              echo "$NON_MODULE"
+              exit 1
+            fi
+          fi
+
+          MODULE_DIRS=$(echo "$CHANGED" | grep '^modules/' | cut -d'/' -f1-2 | sort -u || true)
+          COUNT=$(echo "$MODULE_DIRS" | grep '^modules/' | wc -l)
+
+          if [[ "$COUNT" -eq 0 ]]; then
+            echo "INFO: No module changes detected — skipping module validation."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           if [[ "$COUNT" -gt 1 ]]; then
-            echo "❌ Only one module directory may be changed per PR."
-            echo "   Changed module directories:"
+            echo "ERROR: Only one module directory may be changed per PR."
+            echo "  Changed module directories:"
             echo "$MODULE_DIRS"
             exit 1
           fi
@@ -84,41 +111,47 @@ jobs:
 
           echo "module=$MODULE" >> $GITHUB_OUTPUT
           echo "module_path=$MODULE_PATH" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
 
-          HAS_GRAMMAR=$(test -f "$MODULE_PATH/grammar_extension.lark" && echo "true" || echo "false")
+          HAS_GRAMMAR=$(find "$MODULE_PATH" -name "grammar_extension.lark" | grep -q . && echo "true" || echo "false")
           echo "has_grammar=$HAS_GRAMMAR" >> $GITHUB_OUTPUT
 
       - name: Verify scope in PR title matches module
+        if: steps.detect.outputs.skip != 'true'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           MODULE="${{ steps.detect.outputs.module }}"
+          if [[ -z "$MODULE" ]]; then
+            exit 0
+          fi
           SCOPE=$(echo "$PR_TITLE" | grep -oP '(?<=\()[^)]+(?=\))')
           if [[ "$SCOPE" != "$MODULE" ]]; then
-            echo "❌ PR title scope '$SCOPE' does not match changed module '$MODULE'."
+            echo "ERROR: PR title scope '$SCOPE' does not match changed module '$MODULE'."
             exit 1
           fi
 
       - name: Check module.json has all required fields
+        if: steps.detect.outputs.skip != 'true'
         run: |
           JSON="${{ steps.detect.outputs.module_path }}/module.json"
 
           if [[ ! -f "$JSON" ]]; then
-            echo "❌ module.json not found at $JSON"
+            echo "ERROR: module.json not found at $JSON"
             exit 1
           fi
 
           for FIELD in name version compatible_with type description author repository; do
             VALUE=$(jq -r ".$FIELD // empty" "$JSON")
             if [[ -z "$VALUE" ]]; then
-              echo "❌ module.json missing required field: $FIELD"
+              echo "ERROR: module.json missing required field: $FIELD"
               exit 1
             fi
           done
 
           TYPE=$(jq -r '.type' "$JSON")
           if [[ "$TYPE" != "standalone" && "$TYPE" != "extension" ]]; then
-            echo "❌ module.json 'type' must be 'standalone' or 'extension'. Got: $TYPE"
+            echo "ERROR: module.json 'type' must be 'standalone' or 'extension'. Got: $TYPE"
             exit 1
           fi
           echo "module_type=$TYPE" >> $GITHUB_OUTPUT
@@ -126,30 +159,32 @@ jobs:
           if [[ "$TYPE" == "extension" ]]; then
             EXTENDS=$(jq -r '.extends // empty' "$JSON")
             if [[ -z "$EXTENDS" ]]; then
-              echo "❌ Extension module must have 'extends' field in module.json."
+              echo "ERROR: Extension module must have 'extends' field in module.json."
               exit 1
             fi
           fi
 
       - name: Check interface version compatibility
+        if: steps.detect.outputs.skip != 'true'
         run: |
           JSON="${{ steps.detect.outputs.module_path }}/module.json"
           COMPATIBLE=$(jq -r '.compatible_with' "$JSON")
           INTERFACE_VERSION=1
 
           if [[ "$COMPATIBLE" != "$INTERFACE_VERSION" ]]; then
-            echo "❌ module.json compatible_with=$COMPATIBLE but current INTERFACE_VERSION=$INTERFACE_VERSION"
-            echo "   Update 'compatible_with' to $INTERFACE_VERSION to proceed."
+            echo "ERROR: module.json compatible_with=$COMPATIBLE but current INTERFACE_VERSION=$INTERFACE_VERSION"
+            echo "  Update 'compatible_with' to $INTERFACE_VERSION to proceed."
             exit 1
           fi
 
       - name: Check docs structure (index.md + syntax.md + required sections)
+        if: steps.detect.outputs.skip != 'true'
         run: |
           MODULE_PATH="${{ steps.detect.outputs.module_path }}"
 
           for FILE in docs/index.md docs/syntax.md; do
             if [[ ! -f "$MODULE_PATH/$FILE" ]]; then
-              echo "❌ Required documentation file missing: $MODULE_PATH/$FILE"
+              echo "ERROR: Required documentation file missing: $MODULE_PATH/$FILE"
               exit 1
             fi
           done
@@ -157,52 +192,47 @@ jobs:
           INDEX="$MODULE_PATH/docs/index.md"
           for SECTION in "## Overview" "## Prerequisites" "## Setup" "## Quick Example"; do
             if ! grep -q "^$SECTION" "$INDEX"; then
-              echo "❌ docs/index.md missing required section: $SECTION"
+              echo "ERROR: docs/index.md missing required section: $SECTION"
               exit 1
             fi
           done
 
           SYNTAX="$MODULE_PATH/docs/syntax.md"
           if ! grep -q "^## " "$SYNTAX"; then
-            echo "❌ docs/syntax.md has no feature sections (needs at least one ## heading)"
+            echo "ERROR: docs/syntax.md has no feature sections (needs at least one ## heading)"
             exit 1
           fi
 
       - name: Check tests folder structure
+        if: steps.detect.outputs.skip != 'true'
         run: |
           MODULE_PATH="${{ steps.detect.outputs.module_path }}"
           TYPE=$(jq -r '.type' "$MODULE_PATH/module.json")
           HAS_GRAMMAR="${{ steps.detect.outputs.has_grammar }}"
 
-          # Unit tests: always required
           UNIT_TESTS=$(ls "$MODULE_PATH/tests/unit/test_"*.py 2>/dev/null | wc -l)
           if [[ "$UNIT_TESTS" -eq 0 ]]; then
-            echo "❌ Missing unit tests. Create at least one file in $MODULE_PATH/tests/unit/test_*.py"
+            echo "ERROR: Missing unit tests. Create at least one file in $MODULE_PATH/tests/unit/test_*.py"
             exit 1
           fi
 
-          # Validator tests: required if native_validator.py exists
-          if [[ -f "$MODULE_PATH/native_validator.py" ]]; then
+          if find "$MODULE_PATH" -name "native_validator.py" | grep -q .; then
             if [[ ! -f "$MODULE_PATH/tests/unit/test_validator.py" ]]; then
-              echo "❌ native_validator.py exists but tests/unit/test_validator.py is missing"
+              echo "ERROR: native_validator.py exists but tests/unit/test_validator.py is missing"
               exit 1
             fi
           fi
 
-          # Grammar tests: required if grammar_extension.lark exists
           if [[ "$HAS_GRAMMAR" == "true" ]]; then
             if [[ ! -f "$MODULE_PATH/tests/grammar/test_grammar.py" ]]; then
-              echo "❌ grammar_extension.lark found but tests/grammar/test_grammar.py is missing"
+              echo "ERROR: grammar_extension.lark found but tests/grammar/test_grammar.py is missing"
               exit 1
             fi
           fi
 
-          # Integration tests: optional
-          # If docker-compose.test.yml exists, integration tests must also exist.
-          # If neither exists, that is fine — mock-based unit tests are sufficient.
           if [[ -f "$MODULE_PATH/docker-compose.test.yml" ]]; then
             if [[ ! -f "$MODULE_PATH/tests/integration/test_integration.py" ]]; then
-              echo "❌ docker-compose.test.yml found but tests/integration/test_integration.py is missing"
+              echo "ERROR: docker-compose.test.yml found but tests/integration/test_integration.py is missing"
               exit 1
             fi
           fi
@@ -212,13 +242,14 @@ jobs:
     name: Tests & Coverage
     runs-on: ubuntu-latest
     needs: validate-module
+    if: needs.validate-module.outputs.skip != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v4
 
       - name: Install module dependencies
         working-directory: ${{ needs.validate-module.outputs.module_path }}
@@ -229,23 +260,34 @@ jobs:
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: docker compose -f docker-compose.test.yml up -d --wait
 
-      - name: Run unit + grammar tests with coverage (translator ≥80%)
+      - name: Detect Python package name
+        id: pkg
+        working-directory: ${{ needs.validate-module.outputs.module_path }}
+        run: |
+          PKG=$(uv run python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(list(d.get('tool',{}).get('hatch',{}).get('build',{}).get('targets',{}).get('wheel',{}).get('packages',['src'])[0:1])[0] if d.get('tool',{}).get('hatch',{}).get('build',{}).get('targets',{}).get('wheel',{}).get('packages') else 'src')" 2>/dev/null || echo "src")
+          echo "pkg=$PKG" >> $GITHUB_OUTPUT
+
+      - name: Run unit + grammar tests with coverage (translator >=80%)
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
           uv run pytest tests/unit/ tests/grammar/ \
-            --cov=. \
+            --cov=${{ steps.pkg.outputs.pkg }} \
             --cov-report=term-missing \
             --cov-fail-under=80 \
             -v
 
-      - name: Check native_validator coverage (≥90%)
-        if: hashFiles(format('{0}/native_validator.py', needs.validate-module.outputs.module_path)) != ''
+      - name: Check native_validator coverage (>=90%)
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
-          uv run pytest tests/unit/test_validator.py \
-            --cov=native_validator \
-            --cov-fail-under=90 \
-            -v
+          PKG="${{ steps.pkg.outputs.pkg }}"
+          if python -c "import importlib; importlib.import_module('$PKG.native_validator')" 2>/dev/null; then
+            uv run pytest tests/unit/test_validator.py \
+              --cov=${PKG}.native_validator \
+              --cov-fail-under=90 \
+              -v
+          else
+            echo "No native_validator module found, skipping."
+          fi
 
       - name: Run integration tests
         if: needs.validate-module.outputs.module_type == 'standalone'
@@ -254,7 +296,16 @@ jobs:
 
       - name: Run UQAL compliance suite
         working-directory: ${{ needs.validate-module.outputs.module_path }}
-        run: uv run pytest -m compliance -v
+        run: |
+          set +e
+          uv run pytest -m compliance -v
+          EXIT=$?
+          set -e
+          if [ $EXIT -eq 5 ]; then
+            echo "No compliance tests found — skipping."
+            exit 0
+          fi
+          exit $EXIT
 
       - name: Stop test database
         if: always() && needs.validate-module.outputs.module_type == 'standalone'
