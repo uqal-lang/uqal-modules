@@ -79,14 +79,14 @@ jobs:
               "docs_only": true
             }
 
-  # ─── 2b. Code change → version bump + publish + changelog + docs ────────────
+  # ─── 2b. Code change → version bump + publish + changelog + release + docs ──
   publish:
     name: Version, Publish & Changelog
     runs-on: ubuntu-latest
     needs: detect
     if: needs.detect.outputs.skip == 'false' && needs.detect.outputs.docs_only == 'false'
     permissions:
-      contents: write   # for version bump commit + tag
+      contents: write   # for version bump commit, tag, and GitHub Release
       id-token: write   # for OIDC Trusted Publishing
     steps:
       - uses: actions/checkout@v4
@@ -160,6 +160,21 @@ jobs:
             --output CHANGELOG_FRAGMENT.md 2>/dev/null || true
         env:
           GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -f CHANGELOG_FRAGMENT.md ]]; then
+            NOTES_FLAG="--notes-file CHANGELOG_FRAGMENT.md"
+          else
+            NOTES_FLAG="--notes Release ${{ steps.version.outputs.tag }}"
+          fi
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ needs.detect.outputs.module }} v${{ steps.version.outputs.new_version }}" \
+            $NOTES_FLAG \
+            --repo ${{ github.repository }} \
+            "${{ needs.detect.outputs.module_path }}/dist/"*
 
       - name: Trigger uqal-docs update
         uses: peter-evans/repository-dispatch@v3
