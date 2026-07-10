@@ -131,7 +131,7 @@ jobs:
           NEW_VERSION="${{ steps.version.outputs.new_version }}"
           jq ".version = \"$NEW_VERSION\"" "$MODULE_PATH/module.json" > tmp.json
           mv tmp.json "$MODULE_PATH/module.json"
-          echo "✅ module.json version updated to $NEW_VERSION"
+          echo "module.json version updated to $NEW_VERSION"
 
       - name: Commit version bump back to main
         run: |
@@ -146,7 +146,7 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           git tag "$TAG"
           git push origin "$TAG"
-          echo "✅ Created tag $TAG"
+          echo "Created tag $TAG"
 
       - name: Build package
         working-directory: ${{ needs.detect.outputs.module_path }}

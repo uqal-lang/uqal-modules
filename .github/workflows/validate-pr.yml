@@ -22,16 +22,16 @@ jobs:
 
           if [[ "$TARGET" == "main" ]]; then
             if [[ ! "$BRANCH" =~ ^(dev/|hotfix/) ]]; then
-              echo "❌ PRs to main must come from dev/* or hotfix/* branches."
-              echo "   Got: $BRANCH"
+              echo "ERROR: PRs to main must come from dev/* or hotfix/* branches."
+              echo "  Got: $BRANCH"
               exit 1
             fi
           fi
 
           if [[ "$TARGET" =~ ^dev/ ]]; then
             if [[ ! "$BRANCH" =~ ^(feat/|fix/|refactor/|docs/|test/|chore/) ]]; then
-              echo "❌ PRs to dev/* must come from feat/*, fix/*, refactor/*, docs/*, test/*, chore/*."
-              echo "   Got: $BRANCH"
+              echo "ERROR: PRs to dev/* must come from feat/*, fix/*, refactor/*, docs/*, test/*, chore/*."
+              echo "  Got: $BRANCH"
               exit 1
             fi
           fi
@@ -42,10 +42,10 @@ jobs:
         run: |
           PATTERN='^(feat|fix|breaking|refactor|docs|test|chore)\([a-z0-9._-]+\): .{3,}'
           if [[ ! "$PR_TITLE" =~ $PATTERN ]]; then
-            echo "❌ PR title must follow Conventional Commits: type(scope): description"
-            echo "   Valid types: feat, fix, breaking, refactor, docs, test, chore"
-            echo "   Example:     feat(community.postgis): add ST_Within support"
-            echo "   Got:         $PR_TITLE"
+            echo "ERROR: PR title must follow Conventional Commits: type(scope): description"
+            echo "  Valid types: feat, fix, breaking, refactor, docs, test, chore"
+            echo "  Example:     feat(community.postgis): add ST_Within support"
+            echo "  Got:         $PR_TITLE"
             exit 1
           fi
 
@@ -72,36 +72,36 @@ jobs:
           # Block forbidden file types for everyone (secrets, credentials)
           FORBIDDEN=$(echo "$CHANGED" | grep -iE '\.(env|pem|key|p12|pfx|crt|cer|secret)$|^\.env$|id_rsa|id_ed25519' || true)
           if [[ -n "$FORBIDDEN" ]]; then
-            echo "❌ PR contains potentially sensitive files:"
+            echo "ERROR: PR contains potentially sensitive files:"
             echo "$FORBIDDEN"
             exit 1
           fi
 
-          # Block community contributors from changing files outside modules/
-          # Note: .github/ and root files are protected via CODEOWNERS — no runtime check needed here
+          # Block anonymous/first-time contributors from changing files outside modules/
+          # .github/ and root files are protected via CODEOWNERS for everyone else
           NON_MODULE=$(echo "$CHANGED" | grep -v '^modules/' || true)
           if [[ -n "$NON_MODULE" ]]; then
             ASSOCIATION="${{ github.event.pull_request.author_association }}"
             if [[ "$ASSOCIATION" == "NONE" || "$ASSOCIATION" == "FIRST_TIME_CONTRIBUTOR" || "$ASSOCIATION" == "FIRST_TIMER" ]]; then
-              echo "❌ Community contributors may only change files inside modules/."
-              echo "   Unexpected changed files:"
+              echo "ERROR: Community contributors may only change files inside modules/."
+              echo "  Unexpected changed files:"
               echo "$NON_MODULE"
               exit 1
             fi
           fi
 
-          MODULE_DIRS=$(echo "$CHANGED" | grep '^modules/' | cut -d'/' -f1-2 | sort -u)
+          MODULE_DIRS=$(echo "$CHANGED" | grep '^modules/' | cut -d'/' -f1-2 | sort -u || true)
           COUNT=$(echo "$MODULE_DIRS" | grep -c 'modules/' 2>/dev/null || echo 0)
 
           if [[ "$COUNT" -eq 0 ]]; then
-            echo "ℹ️ No module changes detected — skipping module validation."
+            echo "INFO: No module changes detected — skipping module validation."
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           if [[ "$COUNT" -gt 1 ]]; then
-            echo "❌ Only one module directory may be changed per PR."
-            echo "   Changed module directories:"
+            echo "ERROR: Only one module directory may be changed per PR."
+            echo "  Changed module directories:"
             echo "$MODULE_DIRS"
             exit 1
           fi
@@ -124,7 +124,7 @@ jobs:
           MODULE="${{ steps.detect.outputs.module }}"
           SCOPE=$(echo "$PR_TITLE" | grep -oP '(?<=\()[^)]+(?=\))')
           if [[ "$SCOPE" != "$MODULE" ]]; then
-            echo "❌ PR title scope '$SCOPE' does not match changed module '$MODULE'."
+            echo "ERROR: PR title scope '$SCOPE' does not match changed module '$MODULE'."
             exit 1
           fi
 
@@ -134,21 +134,21 @@ jobs:
           JSON="${{ steps.detect.outputs.module_path }}/module.json"
 
           if [[ ! -f "$JSON" ]]; then
-            echo "❌ module.json not found at $JSON"
+            echo "ERROR: module.json not found at $JSON"
             exit 1
           fi
 
           for FIELD in name version compatible_with type description author repository; do
             VALUE=$(jq -r ".$FIELD // empty" "$JSON")
             if [[ -z "$VALUE" ]]; then
-              echo "❌ module.json missing required field: $FIELD"
+              echo "ERROR: module.json missing required field: $FIELD"
               exit 1
             fi
           done
 
           TYPE=$(jq -r '.type' "$JSON")
           if [[ "$TYPE" != "standalone" && "$TYPE" != "extension" ]]; then
-            echo "❌ module.json 'type' must be 'standalone' or 'extension'. Got: $TYPE"
+            echo "ERROR: module.json 'type' must be 'standalone' or 'extension'. Got: $TYPE"
             exit 1
           fi
           echo "module_type=$TYPE" >> $GITHUB_OUTPUT
@@ -156,7 +156,7 @@ jobs:
           if [[ "$TYPE" == "extension" ]]; then
             EXTENDS=$(jq -r '.extends // empty' "$JSON")
             if [[ -z "$EXTENDS" ]]; then
-              echo "❌ Extension module must have 'extends' field in module.json."
+              echo "ERROR: Extension module must have 'extends' field in module.json."
               exit 1
             fi
           fi
@@ -169,8 +169,8 @@ jobs:
           INTERFACE_VERSION=1
 
           if [[ "$COMPATIBLE" != "$INTERFACE_VERSION" ]]; then
-            echo "❌ module.json compatible_with=$COMPATIBLE but current INTERFACE_VERSION=$INTERFACE_VERSION"
-            echo "   Update 'compatible_with' to $INTERFACE_VERSION to proceed."
+            echo "ERROR: module.json compatible_with=$COMPATIBLE but current INTERFACE_VERSION=$INTERFACE_VERSION"
+            echo "  Update 'compatible_with' to $INTERFACE_VERSION to proceed."
             exit 1
           fi
 
@@ -181,7 +181,7 @@ jobs:
 
           for FILE in docs/index.md docs/syntax.md; do
             if [[ ! -f "$MODULE_PATH/$FILE" ]]; then
-              echo "❌ Required documentation file missing: $MODULE_PATH/$FILE"
+              echo "ERROR: Required documentation file missing: $MODULE_PATH/$FILE"
               exit 1
             fi
           done
@@ -189,14 +189,14 @@ jobs:
           INDEX="$MODULE_PATH/docs/index.md"
           for SECTION in "## Overview" "## Prerequisites" "## Setup" "## Quick Example"; do
             if ! grep -q "^$SECTION" "$INDEX"; then
-              echo "❌ docs/index.md missing required section: $SECTION"
+              echo "ERROR: docs/index.md missing required section: $SECTION"
               exit 1
             fi
           done
 
           SYNTAX="$MODULE_PATH/docs/syntax.md"
           if ! grep -q "^## " "$SYNTAX"; then
-            echo "❌ docs/syntax.md has no feature sections (needs at least one ## heading)"
+            echo "ERROR: docs/syntax.md has no feature sections (needs at least one ## heading)"
             exit 1
           fi
 
@@ -209,27 +209,27 @@ jobs:
 
           UNIT_TESTS=$(ls "$MODULE_PATH/tests/unit/test_"*.py 2>/dev/null | wc -l)
           if [[ "$UNIT_TESTS" -eq 0 ]]; then
-            echo "❌ Missing unit tests. Create at least one file in $MODULE_PATH/tests/unit/test_*.py"
+            echo "ERROR: Missing unit tests. Create at least one file in $MODULE_PATH/tests/unit/test_*.py"
             exit 1
           fi
 
           if find "$MODULE_PATH" -name "native_validator.py" | grep -q .; then
             if [[ ! -f "$MODULE_PATH/tests/unit/test_validator.py" ]]; then
-              echo "❌ native_validator.py exists but tests/unit/test_validator.py is missing"
+              echo "ERROR: native_validator.py exists but tests/unit/test_validator.py is missing"
               exit 1
             fi
           fi
 
           if [[ "$HAS_GRAMMAR" == "true" ]]; then
             if [[ ! -f "$MODULE_PATH/tests/grammar/test_grammar.py" ]]; then
-              echo "❌ grammar_extension.lark found but tests/grammar/test_grammar.py is missing"
+              echo "ERROR: grammar_extension.lark found but tests/grammar/test_grammar.py is missing"
               exit 1
             fi
           fi
 
           if [[ -f "$MODULE_PATH/docker-compose.test.yml" ]]; then
             if [[ ! -f "$MODULE_PATH/tests/integration/test_integration.py" ]]; then
-              echo "❌ docker-compose.test.yml found but tests/integration/test_integration.py is missing"
+              echo "ERROR: docker-compose.test.yml found but tests/integration/test_integration.py is missing"
               exit 1
             fi
           fi
@@ -264,7 +264,7 @@ jobs:
           PKG=$(uv run python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(list(d.get('tool',{}).get('hatch',{}).get('build',{}).get('targets',{}).get('wheel',{}).get('packages',['src'])[0:1])[0] if d.get('tool',{}).get('hatch',{}).get('build',{}).get('targets',{}).get('wheel',{}).get('packages') else 'src')" 2>/dev/null || echo "src")
           echo "pkg=$PKG" >> $GITHUB_OUTPUT
 
-      - name: Run unit + grammar tests with coverage (translator ≥80%)
+      - name: Run unit + grammar tests with coverage (translator >=80%)
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
           uv run pytest tests/unit/ tests/grammar/ \
@@ -273,7 +273,7 @@ jobs:
             --cov-fail-under=80 \
             -v
 
-      - name: Check native_validator coverage (≥90%)
+      - name: Check native_validator coverage (>=90%)
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
           PKG="${{ steps.pkg.outputs.pkg }}"
