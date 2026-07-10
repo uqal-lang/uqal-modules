@@ -53,4 +53,5 @@ register_condition_builder(
     lambda node: (f"ST_DWithin({node.column}, ST_GeomFromText(%s, 4326), %s)", (node.point, node.distance)),
 )
 
+__version__ = "0.1.0"
 __all__ = ["PostGISExtension"]
