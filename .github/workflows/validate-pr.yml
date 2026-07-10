@@ -267,7 +267,7 @@ jobs:
           PKG=$(uv run python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(list(d.get('tool',{}).get('hatch',{}).get('build',{}).get('targets',{}).get('wheel',{}).get('packages',['src'])[0:1])[0] if d.get('tool',{}).get('hatch',{}).get('build',{}).get('targets',{}).get('wheel',{}).get('packages') else 'src')" 2>/dev/null || echo "src")
           echo "pkg=$PKG" >> $GITHUB_OUTPUT
 
-      - name: Run unit + grammar tests with coverage (translator >=80%)
+      - name: Run unit + grammar tests with coverage (translator >= 80%)
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
           uv run pytest tests/unit/ tests/grammar/ \
@@ -276,7 +276,7 @@ jobs:
             --cov-fail-under=80 \
             -v
 
-      - name: Check native_validator coverage (>=90%)
+      - name: Check native_validator coverage (>= 90%)
         working-directory: ${{ needs.validate-module.outputs.module_path }}
         run: |
           PKG="${{ steps.pkg.outputs.pkg }}"
